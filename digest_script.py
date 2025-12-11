@@ -79,12 +79,70 @@ def format_news_item(item):
     return f"• {title}\n  {link}\n"
 
 
+def rank_news_with_ai(all_items):
+    """Use AI to rank news by importance for market digest"""
+    GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+    
+    if not GROQ_API_KEY or len(all_items) == 0:
+        # If no API key or no items, return as-is
+        return all_items
+    
+    try:
+        # Create a simple list of titles for AI to rank
+        titles_list = "\n".join([f"{i+1}. {clean_html(item.get('title', ''))[:100]}" 
+                                 for i, item in enumerate(all_items[:20])])  # Limit to first 20
+        
+        prompt = f"""Rank these news headlines by importance for market traders and investors. 
+Focus on: Fed decisions, GDP, inflation, major market moves, India economy, corporate actions.
+
+{titles_list}
+
+Return ONLY the numbers of the top 10 most important headlines, comma-separated (e.g., 3,1,7,2,9,4,8,5,10,6)"""
+
+        response = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {GROQ_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": "llama-3.3-70b-versatile",
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.3,
+                "max_tokens": 100
+            },
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            ai_response = response.json()["choices"][0]["message"]["content"].strip()
+            # Parse the ranked numbers
+            ranked_indices = [int(x.strip())-1 for x in ai_response.split(",") if x.strip().isdigit()]
+            
+            # Reorder items based on AI ranking
+            ranked_items = [all_items[i] for i in ranked_indices if i < len(all_items)]
+            # Add remaining items that weren't ranked
+            remaining = [item for i, item in enumerate(all_items) if i not in ranked_indices]
+            
+            print(f"✓ AI ranked {len(ranked_items)} news items")
+            return ranked_items + remaining
+        else:
+            print(f"✗ AI ranking failed, using original order")
+            return all_items
+    except Exception as e:
+        print(f"✗ AI ranking error: {str(e)[:50]}")
+        return all_items
+
+
 def build_digest_message(all_items):
     """Build simple digest message with just titles and links"""
+    # Use AI to rank news by importance
+    ranked_items = rank_news_with_ai(all_items)
+    
     msg = f"📈 Daily Market Digest — {now_ist().strftime('%d %b %Y')}\n\n"
     
     count = 0
-    for item in all_items:
+    for item in ranked_items:
         if count >= 10:  # 10 items with clean short URLs
             break
         formatted = format_news_item(item)
@@ -126,19 +184,19 @@ def send_telegram(msg):
 # FREE NEWS SOURCES
 # --------------------------
 GLOBAL_RSS = [
-    "https://feeds.bloomberg.com/markets/news.rss",  # Bloomberg Markets
-    "https://www.cnbc.com/id/100003114/device/rss/rss.html",  # CNBC Top News
+    "https://feeds.reuters.com/reuters/businessNews",  # Reuters Business
+    "https://feeds.marketwatch.com/marketwatch/topstories/",  # MarketWatch
 ]
 
 INDIA_RSS = [
     "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms",  # ET Markets
-    "https://www.moneycontrol.com/rss/latestnews.xml",  # MoneyControl
+    "https://www.business-standard.com/rss/markets-106.rss",  # Business Standard
 ]
 
 BSE_RSS = "https://www.bseindia.com/xml-data/announce/RSS.xml"
 
 WORLD_RSS = [
-    "https://feeds.reuters.com/reuters/businessNews",  # Reuters Business
+    "https://www.cnbc.com/id/100727362/device/rss/rss.html",  # CNBC World Markets
 ]
 
 NSE_BLOCK = "https://www.nseindia.com/api/block-deals?index=equities"
@@ -197,32 +255,41 @@ def run_digest():
 
     all_items = []
 
-    # 1. Global macro news
+    # Collect items from each source with limit for diversity
+    # 1. Global macro news (take 3 from each)
     for url in GLOBAL_RSS:
-        all_items.extend(fetch_rss(url))
+        items = fetch_rss(url)[:3]
+        all_items.extend(items)
+        print(f"✓ Fetched {len(items)} from Global RSS")
 
-    # 2. India business news
+    # 2. India business news (take 3 from each)
     for url in INDIA_RSS:
-        all_items.extend(fetch_rss(url))
+        items = fetch_rss(url)[:3]
+        all_items.extend(items)
+        print(f"✓ Fetched {len(items)} from India RSS")
 
-    # 3. BSE announcements
-    all_items.extend(fetch_rss(BSE_RSS))
+    # 3. BSE announcements (take 2)
+    bse_items = fetch_rss(BSE_RSS)[:2]
+    all_items.extend(bse_items)
+    print(f"✓ Fetched {len(bse_items)} from BSE")
 
-    # 4. World events
+    # 4. World events (take 3)
     for url in WORLD_RSS:
-        all_items.extend(fetch_rss(url))
+        items = fetch_rss(url)[:3]
+        all_items.extend(items)
+        print(f"✓ Fetched {len(items)} from World RSS")
 
-    # 5. NSE Block deals
+    # 5. NSE Block deals (take 2)
     nse_block = fetch_nse_json(NSE_BLOCK)
-    for blk in nse_block.get("data", []):
+    for blk in list(nse_block.get("data", []))[:2]:
         all_items.append({
             "title": f"NSE Block Deal: {blk.get('symbol', 'Unknown')}",
             "link": "https://www.nseindia.com"
         })
 
-    # 6. NSE Bulk deals
+    # 6. NSE Bulk deals (take 2)
     nse_bulk = fetch_nse_json(NSE_BULK)
-    for blk in nse_bulk.get("data", []):
+    for blk in list(nse_bulk.get("data", []))[:2]:
         all_items.append({
             "title": f"NSE Bulk Deal: {blk.get('symbol', 'Unknown')}",
             "link": "https://www.nseindia.com"
