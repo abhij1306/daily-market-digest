@@ -143,22 +143,22 @@ def run_digest():
     all_items.extend(fetch_rss(BSE_RSS))
 
     # 4. NSE Block deals
-    nse_block = fetch_json(NSE_BLOCK)
+    nse_block = fetch_nse_json(NSE_BLOCK)
     for blk in nse_block.get("data", []):
-    all_items.append({
-        "title": f"NSE Block Deal: {blk.get('symbol', 'Unknown')}",
-        "link": "https://www.nseindia.com",
-        "summary": json.dumps(blk)
-    })
+        all_items.append({
+            "title": f"NSE Block Deal: {blk.get('symbol', 'Unknown')}",
+            "link": "https://www.nseindia.com",
+            "summary": json.dumps(blk)
+        })
 
     # 5. NSE Bulk deals
-    nse_bulk = fetch_json(NSE_BULK)
+    nse_bulk = fetch_nse_json(NSE_BULK)
     for blk in nse_bulk.get("data", []):
-    all_items.append({
-        "title": f"NSE Bulk Deal: {blk.get('symbol', 'Unknown')}",
-        "link": "https://www.nseindia.com",
-        "summary": json.dumps(blk)
-    })
+        all_items.append({
+            "title": f"NSE Bulk Deal: {blk.get('symbol', 'Unknown')}",
+            "link": "https://www.nseindia.com",
+            "summary": json.dumps(blk)
+        })
 
     # Combine into single text block
     combined = "\n".join([f"{i['title']} — {i['summary']}" for i in all_items[:50]])
