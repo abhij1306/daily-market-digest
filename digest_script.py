@@ -56,14 +56,14 @@ def build_digest_message(all_items):
     """Build clean Telegram message from news items"""
     lines = []
     
-    for item in all_items[:20]:  # top 20 news items
+    for item in all_items[:10]:  # top 10 news items
         try:
             lines.append(format_news_item(item))
         except:
             continue
     
     msg = "*Daily Market Digest*\n\n" + "\n\n".join(lines)
-    return msg[:3900]  # Telegram safety limit
+    return msg[:4000]  # Telegram safety limit (max is 4096)
 
 
 # --------------------------
