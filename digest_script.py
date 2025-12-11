@@ -56,10 +56,13 @@ def build_digest_message(all_items):
     
     count = 0
     for item in all_items:
-        if count >= 10:
+        if count >= 5:  # Reduced to 5 items to fit Telegram limit
             break
         formatted = format_news_item(item)
         if formatted:
+            # Check if adding this item would exceed Telegram's limit
+            if len(msg + formatted) > 3800:  # Leave some buffer
+                break
             msg += formatted
             count += 1
     
