@@ -40,14 +40,24 @@ def shorten_url(url):
 
 
 def shorten_link(url):
-    """Shorten URL using is.gd free service"""
+    """Shorten URL using TinyURL free service"""
+    import time
     try:
-        api_url = f"https://is.gd/create.php?format=simple&url={quote_plus(url)}"
-        response = requests.get(api_url, timeout=5)
-        if response.status_code == 200:
-            return response.text.strip()
-        return url
-    except:
+        # Add small delay to avoid rate limiting
+        time.sleep(0.3)
+        
+        api_url = f"https://tinyurl.com/api-create.php?url={quote_plus(url)}"
+        response = requests.get(api_url, timeout=10)
+        
+        if response.status_code == 200 and response.text.startswith('http'):
+            short_url = response.text.strip()
+            print(f"✓ Shortened: {short_url}")
+            return short_url
+        else:
+            print(f"✗ Shortening failed, using original")
+            return url
+    except Exception as e:
+        print(f"✗ Shortening error: {str(e)[:50]}")
         return url
 
 
