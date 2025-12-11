@@ -2,31 +2,35 @@ name: Daily Market Digest
 
 on:
   schedule:
-    - cron: "30 2 * * *"   # 02:30 UTC = 08:00 IST
+    - cron: "30 2 * * *"   # 02:30 UTC = 08:00 IST daily
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout
+      - name: Checkout repo
         uses: actions/checkout@v3
 
-      - name: Install Python
+      - name: Setup Python
         uses: actions/setup-python@v4
         with:
           python-version: "3.11"
 
-      - name: Install deps
+      - name: Install dependencies
         run: pip install feedparser requests
 
-      - name: Run script
+      - name: Run digest script
+        env:
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
         run: python digest_script.py
 
-      - name: Commit results
+      - name: Commit digest files
         run: |
-          git config user.email "bot@example.com"
           git config user.name "News Bot"
-          git add digests/*.md
-          git commit -m "Daily digest"
+          git config user.email "bot@example.com"
+          git add digests/*
+          git commit -m "Daily digest update" || echo "No changes"
           git push
