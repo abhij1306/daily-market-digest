@@ -75,10 +75,8 @@ def format_news_item(item):
     if not title:
         return ""
     
-    # Shorten the link for cleaner messages
-    short_link = shorten_link(link)
-    
-    return f"• {title}\n  {short_link}\n"
+    # Use original link to ensure it works properly
+    return f"• {title}\n  {link}\n"
 
 
 def build_digest_message(all_items):
@@ -87,7 +85,7 @@ def build_digest_message(all_items):
     
     count = 0
     for item in all_items:
-        if count >= 10:  # Increased to 10 items with shortened URLs
+        if count >= 10:  # 10 items with clean short URLs
             break
         formatted = format_news_item(item)
         if formatted:
@@ -128,18 +126,19 @@ def send_telegram(msg):
 # FREE NEWS SOURCES
 # --------------------------
 GLOBAL_RSS = [
-    "https://news.google.com/rss/search?q=fed+OR+gdp+OR+cpi+OR+inflation+OR+markets&hl=en-IN&gl=IN&ceid=IN:en",
-    "https://www.reutersagency.com/feed/?taxonomy=best-topics&post_type=best",
+    "https://feeds.bloomberg.com/markets/news.rss",  # Bloomberg Markets
+    "https://www.cnbc.com/id/100003114/device/rss/rss.html",  # CNBC Top News
 ]
 
 INDIA_RSS = [
-    "https://news.google.com/rss/topics/CAAqBwgKMOTf5wswyY0k?hl=en-IN&gl=IN&ceid=IN:en",
+    "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms",  # ET Markets
+    "https://www.moneycontrol.com/rss/latestnews.xml",  # MoneyControl
 ]
 
 BSE_RSS = "https://www.bseindia.com/xml-data/announce/RSS.xml"
 
 WORLD_RSS = [
-    "https://news.google.com/rss/topics/CAAqJggKIiBDQkFTRWdvSUwyMHZNRGx1YlY4U0FtVnVHZ0pKVGlnQVAB?hl=en-IN&gl=IN&ceid=IN:en",  # World news
+    "https://feeds.reuters.com/reuters/businessNews",  # Reuters Business
 ]
 
 NSE_BLOCK = "https://www.nseindia.com/api/block-deals?index=equities"
