@@ -40,25 +40,31 @@ def shorten_url(url):
 
 
 def shorten_link(url):
-    """Shorten URL using TinyURL free service"""
+    """Shorten URL using TinyURL free service with retry"""
     import time
-    try:
-        # Add small delay to avoid rate limiting
-        time.sleep(0.3)
-        
-        api_url = f"https://tinyurl.com/api-create.php?url={quote_plus(url)}"
-        response = requests.get(api_url, timeout=10)
-        
-        if response.status_code == 200 and response.text.startswith('http'):
-            short_url = response.text.strip()
-            print(f"✓ Shortened: {short_url}")
-            return short_url
-        else:
-            print(f"✗ Shortening failed, using original")
-            return url
-    except Exception as e:
-        print(f"✗ Shortening error: {str(e)[:50]}")
-        return url
+    
+    for attempt in range(2):  # Try twice
+        try:
+            # Add small delay to avoid rate limiting
+            time.sleep(0.5)
+            
+            api_url = f"https://tinyurl.com/api-create.php?url={quote_plus(url)}"
+            response = requests.get(api_url, timeout=15)
+            
+            if response.status_code == 200 and response.text.startswith('http'):
+                short_url = response.text.strip()
+                print(f"✓ Shortened: {short_url}")
+                return short_url
+            else:
+                print(f"✗ Attempt {attempt + 1} failed, retrying...")
+                time.sleep(1)
+        except Exception as e:
+            print(f"✗ Attempt {attempt + 1} error: {str(e)[:50]}")
+            time.sleep(1)
+    
+    # If both attempts fail, return original URL
+    print(f"✗ Using original URL after retries")
+    return url
 
 
 def format_news_item(item):
