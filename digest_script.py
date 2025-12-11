@@ -39,6 +39,18 @@ def shorten_url(url):
         return url
 
 
+def shorten_link(url):
+    """Shorten URL using is.gd free service"""
+    try:
+        api_url = f"https://is.gd/create.php?format=simple&url={quote_plus(url)}"
+        response = requests.get(api_url, timeout=5)
+        if response.status_code == 200:
+            return response.text.strip()
+        return url
+    except:
+        return url
+
+
 def format_news_item(item):
     """Format a single news item - just title and link"""
     title = clean_html(item.get("title", "")).strip()
@@ -47,7 +59,10 @@ def format_news_item(item):
     if not title:
         return ""
     
-    return f"• {title}\n  {link}\n"
+    # Shorten the link for cleaner messages
+    short_link = shorten_link(link)
+    
+    return f"• {title}\n  {short_link}\n"
 
 
 def build_digest_message(all_items):
@@ -56,7 +71,7 @@ def build_digest_message(all_items):
     
     count = 0
     for item in all_items:
-        if count >= 5:  # Reduced to 5 items to fit Telegram limit
+        if count >= 10:  # Increased to 10 items with shortened URLs
             break
         formatted = format_news_item(item)
         if formatted:
