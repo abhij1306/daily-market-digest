@@ -279,21 +279,8 @@ def run_digest():
         all_items.extend(items)
         print(f"✓ Fetched {len(items)} from World RSS")
 
-    # 5. NSE Block deals (take 2)
-    nse_block = fetch_nse_json(NSE_BLOCK)
-    for blk in list(nse_block.get("data", []))[:2]:
-        all_items.append({
-            "title": f"NSE Block Deal: {blk.get('symbol', 'Unknown')}",
-            "link": "https://www.nseindia.com"
-        })
+    print(f"\n📊 Total items collected: {len(all_items)}")
 
-    # 6. NSE Bulk deals (take 2)
-    nse_bulk = fetch_nse_json(NSE_BULK)
-    for blk in list(nse_bulk.get("data", []))[:2]:
-        all_items.append({
-            "title": f"NSE Bulk Deal: {blk.get('symbol', 'Unknown')}",
-            "link": "https://www.nseindia.com"
-        })
 
     # Build simple digest message
     msg = build_digest_message(all_items)
