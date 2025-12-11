@@ -3,7 +3,8 @@ import json
 import requests
 import feedparser
 import datetime
-import urllib.parse
+import re
+from urllib.parse import urlparse, quote_plus
 
 # --------------------------
 # TIMEZONE (IST)
@@ -15,7 +16,59 @@ def now_ist():
 
 
 # --------------------------
+# CLEANING + FORMATTING
+# --------------------------
+def clean_html(raw):
+    """Remove HTML tags and entities"""
+    # Remove HTML tags
+    text = re.sub(r"<[^>]+>", "", raw)
+    
+    # Remove &nbsp; and similar entities
+    text = re.sub(r"&[a-zA-Z]+;", " ", text)
+    
+    # Remove excessive spaces
+    return " ".join(text.split())
+
+
+def shorten_url(url):
+    """Extract domain name from URL"""
+    try:
+        parsed = urlparse(url)
+        return parsed.netloc
+    except:
+        return url
+
+
+def format_news_item(item):
+    """Format a single news item for Telegram"""
+    title = clean_html(item.get("title", "")).strip()
+    summary = clean_html(item.get("summary", "")).strip()
+    link = item.get("link", "")
+    
+    domain = shorten_url(link)
+    
+    # Prefer the title. If summary contains title repeated, ignore.
+    line = f"• {title}\n  Source: {domain}"
+    return line
+
+
+def build_digest_message(all_items):
+    """Build clean Telegram message from news items"""
+    lines = []
+    
+    for item in all_items[:20]:  # top 20 news items
+        try:
+            lines.append(format_news_item(item))
+        except:
+            continue
+    
+    msg = "*Daily Market Digest*\n\n" + "\n\n".join(lines)
+    return msg[:3900]  # Telegram safety limit
+
+
+# --------------------------
 # TELEGRAM SENDER (FREE)
+
 # --------------------------
 def send_telegram(msg):
     TOKEN = os.getenv("TG_TOKEN")
@@ -25,7 +78,7 @@ def send_telegram(msg):
         return
 
     # URL-encode message to avoid breaking the URL
-    safe_msg = urllib.parse.quote_plus(msg)
+    safe_msg = quote_plus(msg)
 
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage?chat_id={CHAT_ID}&text={safe_msg}"
     try:
@@ -99,32 +152,6 @@ def fetch_nse_json(url):
 
 
 # --------------------------
-# FREE SUMMARIZER (DeepSeek-R1)
-# --------------------------
-def summarize(text):
-    endpoint = "https://api.deepseek.com/v1/chat/completions"
-    headers = {"Content-Type": "application/json"}
-
-    payload = {
-        "model": "deepseek-r1",
-        "messages": [
-            {"role": "user",
-             "content": f"Summarize the following into concise bullet points. Focus on market-moving events, India company news, global macro signals, and major world events.\n\n{text}"}
-        ],
-        "temperature": 0.3,
-        "max_tokens": 350
-    }
-
-    try:
-        r = requests.post(endpoint, headers=headers, data=json.dumps(payload), timeout=20)
-        if r.status_code == 200:
-            return r.json()["choices"][0]["message"]["content"]
-        return text
-    except:
-        return text
-
-
-# --------------------------
 # MAIN DIGEST LOGIC
 # --------------------------
 def run_digest():
@@ -160,21 +187,18 @@ def run_digest():
             "summary": json.dumps(blk)
         })
 
-    # Combine into single text block
-    combined = "\n".join([f"{i['title']} — {i['summary']}" for i in all_items[:50]])
-
-    # Summarize via free LLM
-    final_summary = summarize(combined)
-
+    # Build clean Telegram message
+    msg = build_digest_message(all_items)
+    
     # Save to file
     os.makedirs("digests", exist_ok=True)
     fname = f"digests/digest_{now_ist().strftime('%Y%m%d_%H%M')}.md"
-
+    
     with open(fname, "w", encoding="utf-8") as f:
-        f.write(final_summary)
-
+        f.write(msg)
+    
     # Send to Telegram
-    send_telegram(final_summary[:3500])
+    send_telegram(msg)
 
     return fname
 
