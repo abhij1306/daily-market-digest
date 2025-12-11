@@ -1,0 +1,35 @@
+name: Breaking Stock News Alerts
+
+on:
+  schedule:
+    # Run every 3 hours during market hours (9 AM to 6 PM IST)
+    - cron: "30 3,6,9,12 * * 1-5"   # 9 AM, 12 PM, 3 PM, 6 PM IST on weekdays
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  breaking-news:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install feedparser requests
+
+      - name: Send breaking news alerts
+        env:
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: python breaking_news.py
