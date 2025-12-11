@@ -39,62 +39,32 @@ def shorten_url(url):
         return url
 
 
-def escape_md(text):
-    """Escape special characters for Telegram MarkdownV2"""
-    # For basic markdown, we only need to escape certain characters
-    special_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
-    for char in special_chars:
-        text = text.replace(char, f'\\{char}')
-    return text
-
-
 def format_news_item(item):
-    """Format a single news item for Telegram with markdown"""
+    """Format a single news item - just title and link"""
     title = clean_html(item.get("title", "")).strip()
-    summary = clean_html(item.get("summary", "")).strip()
     link = item.get("link", "")
     
-    source = shorten_url(link)
+    if not title:
+        return ""
     
-    # Limit summary length
-    if len(summary) > 150:
-        summary = summary[:147] + "..."
+    return f"• {title}\n  {link}\n"
+
+
+def build_digest_message(all_items):
+    """Build simple digest message with just titles and links"""
+    msg = f"📈 Daily Market Digest — {now_ist().strftime('%d %b %Y')}\n\n"
     
-    return f"• *{escape_md(title)}*\n  _{escape_md(summary)}_\n  🔗 {escape_md(source)}\n"
+    count = 0
+    for item in all_items:
+        if count >= 10:
+            break
+        formatted = format_news_item(item)
+        if formatted:
+            msg += formatted
+            count += 1
+    
+    return msg
 
-
-def build_markdown_digest(global_items, india_items, corporate_items, world_items):
-    """Build beautiful markdown digest with sections"""
-    msg = f"*📈 Daily Market Digest — {escape_md(now_ist().strftime('%d %b %Y'))}*\n\n"
-    msg += "────────────────────\n\n"
-
-    # GLOBAL MACRO
-    msg += "*🌍 Global Macro Highlights*\n"
-    for it in global_items[:5]:
-        msg += format_news_item(it)
-    msg += "\n────────────────────\n\n"
-
-    # INDIA MARKET
-    msg += "*🇮🇳 India Market Highlights*\n"
-    for it in india_items[:5]:
-        msg += format_news_item(it)
-    msg += "\n────────────────────\n\n"
-
-    # CORPORATE EVENTS
-    msg += "*🏢 Corporate Actions (NSE/BSE)*\n"
-    for ce in corporate_items[:5]:
-        msg += escape_md(f"• {ce}") + "\n"
-    msg += "\n────────────────────\n\n"
-
-    # WORLD EVENTS
-    msg += "*🌐 Major World Events*\n"
-    for it in world_items[:5]:
-        msg += format_news_item(it)
-    msg += "\n────────────────────\n\n"
-
-    msg += "_Reply */full* to receive the detailed full digest\\._"
-
-    return msg[:3900]  # safe Telegram limit
 
 
 
@@ -192,45 +162,41 @@ def fetch_nse_json(url):
 # --------------------------
 def run_digest():
 
-    # Categorized items
-    global_items = []
-    india_items = []
-    corporate_items = []
-    world_items = []
+    all_items = []
 
     # 1. Global macro news
     for url in GLOBAL_RSS:
-        global_items.extend(fetch_rss(url))
+        all_items.extend(fetch_rss(url))
 
     # 2. India business news
     for url in INDIA_RSS:
-        india_items.extend(fetch_rss(url))
+        all_items.extend(fetch_rss(url))
 
     # 3. BSE announcements
-    bse_items = fetch_rss(BSE_RSS)
-    for item in bse_items:
-        corporate_items.append(clean_html(item.get("title", "")))
+    all_items.extend(fetch_rss(BSE_RSS))
 
-    # 4. NSE Block deals
+    # 4. World events
+    for url in WORLD_RSS:
+        all_items.extend(fetch_rss(url))
+
+    # 5. NSE Block deals
     nse_block = fetch_nse_json(NSE_BLOCK)
     for blk in nse_block.get("data", []):
-        symbol = blk.get('symbol', 'Unknown')
-        qty = blk.get('quantity', '')
-        corporate_items.append(f"Block Deal: {symbol} - Qty: {qty}")
+        all_items.append({
+            "title": f"NSE Block Deal: {blk.get('symbol', 'Unknown')}",
+            "link": "https://www.nseindia.com"
+        })
 
-    # 5. NSE Bulk deals
+    # 6. NSE Bulk deals
     nse_bulk = fetch_nse_json(NSE_BULK)
     for blk in nse_bulk.get("data", []):
-        symbol = blk.get('symbol', 'Unknown')
-        qty = blk.get('quantity', '')
-        corporate_items.append(f"Bulk Deal: {symbol} - Qty: {qty}")
+        all_items.append({
+            "title": f"NSE Bulk Deal: {blk.get('symbol', 'Unknown')}",
+            "link": "https://www.nseindia.com"
+        })
 
-    # 6. World events
-    for url in WORLD_RSS:
-        world_items.extend(fetch_rss(url))
-
-    # Build beautiful markdown digest
-    msg = build_markdown_digest(global_items, india_items, corporate_items, world_items)
+    # Build simple digest message
+    msg = build_digest_message(all_items)
     
     # Save to file
     os.makedirs("digests", exist_ok=True)
