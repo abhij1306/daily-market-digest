@@ -39,31 +39,63 @@ def shorten_url(url):
         return url
 
 
+def escape_md(text):
+    """Escape special characters for Telegram MarkdownV2"""
+    # For basic markdown, we only need to escape certain characters
+    special_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+    for char in special_chars:
+        text = text.replace(char, f'\\{char}')
+    return text
+
+
 def format_news_item(item):
-    """Format a single news item for Telegram"""
+    """Format a single news item for Telegram with markdown"""
     title = clean_html(item.get("title", "")).strip()
     summary = clean_html(item.get("summary", "")).strip()
     link = item.get("link", "")
     
-    domain = shorten_url(link)
+    source = shorten_url(link)
     
-    # Prefer the title. If summary contains title repeated, ignore.
-    line = f"• {title}\n  Source: {domain}"
-    return line
+    # Limit summary length
+    if len(summary) > 150:
+        summary = summary[:147] + "..."
+    
+    return f"• *{escape_md(title)}*\n  _{escape_md(summary)}_\n  🔗 {escape_md(source)}\n"
 
 
-def build_digest_message(all_items):
-    """Build clean Telegram message from news items"""
-    lines = []
-    
-    for item in all_items[:10]:  # top 10 news items
-        try:
-            lines.append(format_news_item(item))
-        except:
-            continue
-    
-    msg = "*Daily Market Digest*\n\n" + "\n\n".join(lines)
-    return msg[:4000]  # Telegram safety limit (max is 4096)
+def build_markdown_digest(global_items, india_items, corporate_items, world_items):
+    """Build beautiful markdown digest with sections"""
+    msg = f"*📈 Daily Market Digest — {escape_md(now_ist().strftime('%d %b %Y'))}*\n\n"
+    msg += "────────────────────\n\n"
+
+    # GLOBAL MACRO
+    msg += "*🌍 Global Macro Highlights*\n"
+    for it in global_items[:5]:
+        msg += format_news_item(it)
+    msg += "\n────────────────────\n\n"
+
+    # INDIA MARKET
+    msg += "*🇮🇳 India Market Highlights*\n"
+    for it in india_items[:5]:
+        msg += format_news_item(it)
+    msg += "\n────────────────────\n\n"
+
+    # CORPORATE EVENTS
+    msg += "*🏢 Corporate Actions (NSE/BSE)*\n"
+    for ce in corporate_items[:5]:
+        msg += escape_md(f"• {ce}") + "\n"
+    msg += "\n────────────────────\n\n"
+
+    # WORLD EVENTS
+    msg += "*🌐 Major World Events*\n"
+    for it in world_items[:5]:
+        msg += format_news_item(it)
+    msg += "\n────────────────────\n\n"
+
+    msg += "_Reply */full* to receive the detailed full digest\\._"
+
+    return msg[:3900]  # safe Telegram limit
+
 
 
 # --------------------------
@@ -101,6 +133,10 @@ INDIA_RSS = [
 ]
 
 BSE_RSS = "https://www.bseindia.com/xml-data/announce/RSS.xml"
+
+WORLD_RSS = [
+    "https://news.google.com/rss/topics/CAAqJggKIiBDQkFTRWdvSUwyMHZNRGx1YlY4U0FtVnVHZ0pKVGlnQVAB?hl=en-IN&gl=IN&ceid=IN:en",  # World news
+]
 
 NSE_BLOCK = "https://www.nseindia.com/api/block-deals?index=equities"
 NSE_BULK  = "https://www.nseindia.com/api/bulk-deals?index=equities"
@@ -156,39 +192,45 @@ def fetch_nse_json(url):
 # --------------------------
 def run_digest():
 
-    all_items = []
+    # Categorized items
+    global_items = []
+    india_items = []
+    corporate_items = []
+    world_items = []
 
-    # 1. Global news
+    # 1. Global macro news
     for url in GLOBAL_RSS:
-        all_items.extend(fetch_rss(url))
+        global_items.extend(fetch_rss(url))
 
     # 2. India business news
     for url in INDIA_RSS:
-        all_items.extend(fetch_rss(url))
+        india_items.extend(fetch_rss(url))
 
     # 3. BSE announcements
-    all_items.extend(fetch_rss(BSE_RSS))
+    bse_items = fetch_rss(BSE_RSS)
+    for item in bse_items:
+        corporate_items.append(clean_html(item.get("title", "")))
 
     # 4. NSE Block deals
     nse_block = fetch_nse_json(NSE_BLOCK)
     for blk in nse_block.get("data", []):
-        all_items.append({
-            "title": f"NSE Block Deal: {blk.get('symbol', 'Unknown')}",
-            "link": "https://www.nseindia.com",
-            "summary": json.dumps(blk)
-        })
+        symbol = blk.get('symbol', 'Unknown')
+        qty = blk.get('quantity', '')
+        corporate_items.append(f"Block Deal: {symbol} - Qty: {qty}")
 
     # 5. NSE Bulk deals
     nse_bulk = fetch_nse_json(NSE_BULK)
     for blk in nse_bulk.get("data", []):
-        all_items.append({
-            "title": f"NSE Bulk Deal: {blk.get('symbol', 'Unknown')}",
-            "link": "https://www.nseindia.com",
-            "summary": json.dumps(blk)
-        })
+        symbol = blk.get('symbol', 'Unknown')
+        qty = blk.get('quantity', '')
+        corporate_items.append(f"Bulk Deal: {symbol} - Qty: {qty}")
 
-    # Build clean Telegram message
-    msg = build_digest_message(all_items)
+    # 6. World events
+    for url in WORLD_RSS:
+        world_items.extend(fetch_rss(url))
+
+    # Build beautiful markdown digest
+    msg = build_markdown_digest(global_items, india_items, corporate_items, world_items)
     
     # Save to file
     os.makedirs("digests", exist_ok=True)
