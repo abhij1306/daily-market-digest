@@ -88,26 +88,48 @@ def short_domain(url: str) -> str:
 
 
 def shorten_link(url: str) -> str:
-    """Shorten URL using TinyURL free service with retry and fallback"""
+    """Shorten URL using Short.io API with custom domain"""
     if not url or len(url) < 30:  # Don't shorten already short URLs
+        return url
+    
+    # Short.io API configuration
+    SHORTIO_API_KEY = os.getenv("SHORTIO_API_KEY", "REMOVED_SECRET")
+    SHORTIO_DOMAIN = "abhij1306.short.gy"
+    
+    if not SHORTIO_API_KEY:
+        logging.warning("Short.io API key not set, using original URL")
         return url
     
     for attempt in range(2):  # Try twice
         try:
-            time.sleep(0.3)  # Small delay to avoid rate limiting
-            from urllib.parse import quote_plus
-            api_url = f"https://tinyurl.com/api-create.php?url={quote_plus(url)}"
-            response = requests.get(api_url, timeout=10)
+            time.sleep(0.2)  # Small delay to avoid rate limiting
+            headers = {
+                "Authorization": SHORTIO_API_KEY,
+                "Content-Type": "application/json"
+            }
+            data = {
+                "originalURL": url,
+                "domain": SHORTIO_DOMAIN
+            }
+            response = requests.post(
+                "https://api.short.io/links",
+                headers=headers,
+                json=data,
+                timeout=8
+            )
             
-            if response.status_code == 200 and response.text.startswith('http'):
-                short_url = response.text.strip()
-                logging.info("Shortened URL: %s -> %s", url[:50], short_url)
-                return short_url
+            if response.status_code == 200:
+                result = response.json()
+                short_url = result.get("shortURL", "")
+                if short_url:
+                    logging.info("Shortened URL: %s -> %s", url[:50], short_url)
+                    return short_url
             else:
-                logging.warning("TinyURL attempt %d failed: %s", attempt + 1, response.text[:100])
+                logging.warning("Short.io attempt %d failed (%s): %s", 
+                              attempt + 1, response.status_code, response.text[:100])
                 time.sleep(1)
         except Exception as e:
-            logging.warning("TinyURL attempt %d error: %s", attempt + 1, str(e)[:100])
+            logging.warning("Short.io attempt %d error: %s", attempt + 1, str(e)[:100])
             time.sleep(1)
     
     # If both attempts fail, return original URL
@@ -280,15 +302,17 @@ def rank_with_groq(all_items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 # Formatter: Markdown V2 beautiful layout
 # -------------------------
 def format_item_plain(item: Dict[str, Any]) -> str:
-    """Format news item in plain text with clickable link"""
+    """Format news item in plain text with shortened link"""
     title = clean_text(item.get("title", "")).strip()
     if not title:
         return ""
     link = item.get("link", "") or ""
     
-    # Use original link - Telegram will make it clickable automatically
+    # Shorten the link using Short.io
+    short_link = shorten_link(link) if link else ""
+    
     # Plain text format: bullet + title + link on next line
-    return f"• {title}\n  {link}\n\n"
+    return f"• {title}\n  {short_link}\n\n"
 
 
 def build_plain_message(global_items: List[Dict[str, Any]],
