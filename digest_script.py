@@ -280,17 +280,15 @@ def rank_with_groq(all_items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 # Formatter: Markdown V2 beautiful layout
 # -------------------------
 def format_item_plain(item: Dict[str, Any]) -> str:
-    """Format news item in plain text with shortened link"""
+    """Format news item in plain text with clickable link"""
     title = clean_text(item.get("title", "")).strip()
     if not title:
         return ""
     link = item.get("link", "") or ""
     
-    # Shorten the link
-    short_link = shorten_link(link) if link else ""
-    
+    # Use original link - Telegram will make it clickable automatically
     # Plain text format: bullet + title + link on next line
-    return f"• {title}\n  {short_link}\n\n"
+    return f"• {title}\n  {link}\n\n"
 
 
 def build_plain_message(global_items: List[Dict[str, Any]],
