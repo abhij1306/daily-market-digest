@@ -313,13 +313,19 @@ def build_markdown_message(global_items: List[Dict[str, Any]],
 # -------------------------
 def send_telegram_markdown(message: str, parse_mode: str = "MarkdownV2") -> bool:
     if not TG_TOKEN or not TG_CHAT_ID:
-        logging.warning("Telegram credentials missing")
+        logging.error("Telegram credentials missing - TG_TOKEN: %s, TG_CHAT_ID: %s", 
+                     "SET" if TG_TOKEN else "MISSING", 
+                     "SET" if TG_CHAT_ID else "MISSING")
         return False
+    
+    logging.info("Attempting to send Telegram message (length: %d chars)", len(message))
     url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
     headers = {"Content-Type": "application/json"}
     chunks = chunk_text(message, TELEGRAM_MAX)
+    logging.info("Message split into %d chunks", len(chunks))
     
-    for c in chunks:
+    for idx, c in enumerate(chunks):
+        logging.info("Sending chunk %d/%d", idx + 1, len(chunks))
         payload = {"chat_id": TG_CHAT_ID, "text": c, "parse_mode": parse_mode}
         try:
             r = requests.post(url, json=payload, timeout=15)
@@ -341,11 +347,15 @@ def send_telegram_markdown(message: str, parse_mode: str = "MarkdownV2") -> bool
                         return False
                 else:
                     return False
+            else:
+                logging.info("Chunk %d sent successfully", idx + 1)
             # small pause to avoid hitting rate limits
             time.sleep(0.4)
         except Exception as e:
             logging.exception("Telegram send exception: %s", str(e)[:200])
             return False
+    
+    logging.info("All chunks sent successfully")
     return True
 
 
@@ -379,25 +389,25 @@ def run_digest() -> Tuple[str, Dict[str, Any]]:
             except Exception as e:
                 logging.warning("Error processing feed %s: %s", url, str(e)[:200])
 
-    # 2. NSE corporate events (block / bulk) - add to corporate_items list
+    # 2. NSE corporate events (block / bulk) - DISABLED due to unreliable API (404 errors)
     corporate_items: List[Dict[str, Any]] = []
-    try:
-        nse_block = fetch_nse_json(NSE_BLOCK)
-        for blk in nse_block.get("data", [])[:10]:
-            # blk is often a dict with symbol, quantity, avgprice
-            corporate_items.append({
-                "symbol": blk.get("symbol") if isinstance(blk, dict) else str(blk),
-                "raw": blk
-            })
-        nse_bulk = fetch_nse_json(NSE_BULK)
-        for b in nse_bulk.get("data", [])[:10]:
-            corporate_items.append({
-                "symbol": b.get("symbol") if isinstance(b, dict) else str(b),
-                "raw": b
-            })
-        logging.info("Corporate items collected: %d", len(corporate_items))
-    except Exception as e:
-        logging.warning("Error collecting corporate items: %s", str(e)[:200])
+    # try:
+    #     nse_block = fetch_nse_json(NSE_BLOCK)
+    #     for blk in nse_block.get("data", [])[:10]:
+    #         # blk is often a dict with symbol, quantity, avgprice
+    #         corporate_items.append({
+    #             "symbol": blk.get("symbol") if isinstance(blk, dict) else str(blk),
+    #             "raw": blk
+    #         })
+    #     nse_bulk = fetch_nse_json(NSE_BULK)
+    #     for b in nse_bulk.get("data", [])[:10]:
+    #         corporate_items.append({
+    #             "symbol": b.get("symbol") if isinstance(b, dict) else str(b),
+    #             "raw": b
+    #         })
+    #     logging.info("Corporate items collected: %d", len(corporate_items))
+    # except Exception as e:
+    #     logging.warning("Error collecting corporate items: %s", str(e)[:200])
 
     # 3. Split all_items into categories via simple heuristics
     global_items, india_items, world_items = [], [], []
