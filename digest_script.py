@@ -318,13 +318,29 @@ def send_telegram_markdown(message: str, parse_mode: str = "MarkdownV2") -> bool
     url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
     headers = {"Content-Type": "application/json"}
     chunks = chunk_text(message, TELEGRAM_MAX)
+    
     for c in chunks:
         payload = {"chat_id": TG_CHAT_ID, "text": c, "parse_mode": parse_mode}
         try:
             r = requests.post(url, json=payload, timeout=15)
             if r.status_code != 200:
                 logging.warning("Telegram API error %s: %s", r.status_code, r.text[:500])
-                return False
+                
+                # If MarkdownV2 parsing failed, try plain text as fallback
+                if parse_mode == "MarkdownV2" and "can't parse" in r.text.lower():
+                    logging.info("MarkdownV2 parse error, retrying with plain text")
+                    # Remove markdown formatting and retry
+                    plain_text = c.replace("\\", "").replace("*", "").replace("_", "").replace("`", "")
+                    payload_plain = {"chat_id": TG_CHAT_ID, "text": plain_text}
+                    r2 = requests.post(url, json=payload_plain, timeout=15)
+                    if r2.status_code == 200:
+                        logging.info("Plain text fallback succeeded")
+                        continue
+                    else:
+                        logging.error("Plain text fallback also failed: %s", r2.text[:500])
+                        return False
+                else:
+                    return False
             # small pause to avoid hitting rate limits
             time.sleep(0.4)
         except Exception as e:
