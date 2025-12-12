@@ -41,13 +41,17 @@ TELEGRAM_MAX = 3900  # safe per-message limit with MarkdownV2
 GLOBAL_RSS = [
     "https://feeds.reuters.com/reuters/businessNews",
     "https://feeds.marketwatch.com/marketwatch/topstories/",
+    "https://news.google.com/rss/search?q=fed+interest+rates+when:1d&hl=en-US&gl=US&ceid=US:en",
+    "https://news.google.com/rss/search?q=gdp+inflation+economy+when:1d&hl=en-US&gl=US&ceid=US:en",
 ]
 INDIA_RSS = [
     "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms",
     "https://www.business-standard.com/rss/markets-106.rss",
+    "https://news.google.com/rss/search?q=india+stock+market+sensex+nifty+when:1d&hl=en-IN&gl=IN&ceid=IN:en",
 ]
 WORLD_RSS = [
     "https://www.cnbc.com/id/100727362/device/rss/rss.xml",
+    "https://news.google.com/rss/search?q=stock+market+nasdaq+dow+jones+when:1d&hl=en-US&gl=US&ceid=US:en",
 ]
 BSE_RSS = "https://www.bseindia.com/xml-data/announce/RSS.xml"
 NSE_BLOCK = "https://www.nseindia.com/api/block-deals?index=equities"
@@ -259,14 +263,25 @@ def rank_with_groq(all_items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     if not GROQ_API_KEY or len(all_items) == 0:
         return all_items
     try:
-        # build simple prompt
+        # build simple prompt with titles
         titles = "\n".join(
             f"{i+1}. {clean_text(it.get('title',''))[:140]}" for i, it in enumerate(all_items[:30])
         )
         prompt = (
-            "Rank these headlines by importance to market participants (focus: Fed, GDP, CPI, central banks, "
-            "major corporate actions that affect listed stocks in India/US). Return a comma-separated list of the "
-            "top indices, e.g., 3,1,7,2. Only numbers.\n\n" + titles
+            "You are a financial news curator. From these headlines, select ONLY the most important and UNIQUE news "
+            "relevant to market traders and investors. Focus on:\n"
+            "- Fed/RBI decisions, interest rates, monetary policy\n"
+            "- GDP, inflation, CPI, economic data\n"
+            "- Major corporate actions (earnings, M&A, IPOs)\n"
+            "- Stock market moves (Sensex, Nifty, Dow, Nasdaq)\n"
+            "- Significant geopolitical events affecting markets\n\n"
+            "EXCLUDE:\n"
+            "- Personal finance advice\n"
+            "- Celebrity/entertainment news\n"
+            "- Duplicate stories (same event from different sources)\n"
+            "- Minor company updates\n\n"
+            "Headlines:\n" + titles + "\n\n"
+            "Return ONLY the numbers of the top 8-10 UNIQUE, RELEVANT headlines, comma-separated (e.g., 3,1,7,2,9,4,8,5)"
         )
         resp = requests.post(
             "https://api.groq.com/openai/v1/chat/completions",
@@ -356,7 +371,6 @@ def build_plain_message(global_items: List[Dict[str, Any]],
         parts.append("🌐 Major World Events\n\n")
         for it in world_items[:5]:
             parts.append(format_item_plain(it))
-        parts.append("\nReply /full to receive the extended digest.")
 
 
     text = "".join(parts)
