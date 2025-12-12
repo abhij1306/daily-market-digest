@@ -3,7 +3,7 @@ name: Daily Market Digest
 on:
   schedule:
     - cron: "30 2 * * *"   # 02:30 UTC = 08:00 IST daily
-  workflow_dispatch:
+  workflow_dispatch:   # Allows manual triggering
 
 permissions:
   contents: write
