@@ -1,105 +1,224 @@
+#!/usr/bin/env python3
+"""
+digest_script.py
+Production-ready Market Digest generator.
+
+Environment variables expected:
+- TG_TOKEN        -> Telegram bot token
+- TG_CHAT_ID      -> Telegram numeric chat id
+- GROQ_API_KEY    -> OPTIONAL: for AI ranking (if you have one)
+- STORAGE_PATH    -> optional path for outputs (default ./digests)
+- LOG_PATH        -> optional path for logs (default ./logs)
+
+Usage:
+- Run locally or in CI (GitHub Actions). Designed for scheduled runs.
+"""
+from __future__ import annotations
 import os
 import json
+import time
 import requests
 import feedparser
 import datetime
+import hashlib
+import logging
 import re
-from urllib.parse import urlparse, quote_plus
+from typing import List, Dict, Any, Tuple
+from urllib.parse import urlparse
 
-# --------------------------
-# TIMEZONE (IST)
-# --------------------------
+# -------------------------
+# Configuration
+# -------------------------
 IST_OFFSET = datetime.timedelta(hours=5, minutes=30)
+STORAGE_PATH = os.getenv("STORAGE_PATH", "./digests")
+LOG_PATH = os.getenv("LOG_PATH", "./logs")
+TG_TOKEN = os.getenv("TG_TOKEN")
+TG_CHAT_ID = os.getenv("TG_CHAT_ID")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")  # optional ranking API
+TELEGRAM_MAX = 3900  # safe per-message limit with MarkdownV2
 
-def now_ist():
+# RSS / Sources - adjust as necessary
+GLOBAL_RSS = [
+    "https://feeds.reuters.com/reuters/businessNews",
+    "https://feeds.marketwatch.com/marketwatch/topstories/",
+]
+INDIA_RSS = [
+    "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms",
+    "https://www.business-standard.com/rss/markets-106.rss",
+]
+WORLD_RSS = [
+    "https://www.cnbc.com/id/100727362/device/rss/rss.xml",
+]
+BSE_RSS = "https://www.bseindia.com/xml-data/announce/RSS.xml"
+NSE_BLOCK = "https://www.nseindia.com/api/block-deals?index=equities"
+NSE_BULK = "https://www.nseindia.com/api/bulk-deals?index=equities"
+
+# Logging
+os.makedirs(LOG_PATH, exist_ok=True)
+logging.basicConfig(
+    filename=os.path.join(LOG_PATH, "digest.log"),
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s: %(message)s",
+)
+console = logging.StreamHandler()
+console.setLevel(logging.INFO)
+logging.getLogger("").addHandler(console)
+
+
+# -------------------------
+# Utilities
+# -------------------------
+def now_ist() -> datetime.datetime:
     return datetime.datetime.utcnow() + IST_OFFSET
 
 
-# --------------------------
-# CLEANING + FORMATTING
-# --------------------------
-def clean_html(raw):
-    """Remove HTML tags and entities"""
-    # Remove HTML tags
-    text = re.sub(r"<[^>]+>", "", raw)
-    
-    # Remove &nbsp; and similar entities
-    text = re.sub(r"&[a-zA-Z]+;", " ", text)
-    
-    # Remove excessive spaces
-    return " ".join(text.split())
+def ensure_dirs():
+    os.makedirs(STORAGE_PATH, exist_ok=True)
+    os.makedirs(LOG_PATH, exist_ok=True)
 
 
-def shorten_url(url):
-    """Extract domain name from URL"""
+def short_domain(url: str) -> str:
     try:
         parsed = urlparse(url)
-        return parsed.netloc
-    except:
+        host = parsed.netloc or url
+        # remove www.
+        return host.replace("www.", "")
+    except Exception:
         return url
 
 
-def shorten_link(url):
-    """Shorten URL using TinyURL free service with retry"""
-    import time
-    
-    for attempt in range(2):  # Try twice
-        try:
-            # Add small delay to avoid rate limiting
-            time.sleep(0.5)
-            
-            api_url = f"https://tinyurl.com/api-create.php?url={quote_plus(url)}"
-            response = requests.get(api_url, timeout=15)
-            
-            if response.status_code == 200 and response.text.startswith('http'):
-                short_url = response.text.strip()
-                print(f"✓ Shortened: {short_url}")
-                return short_url
-            else:
-                print(f"✗ Attempt {attempt + 1} failed, retrying...")
-                time.sleep(1)
-        except Exception as e:
-            print(f"✗ Attempt {attempt + 1} error: {str(e)[:50]}")
-            time.sleep(1)
-    
-    # If both attempts fail, return original URL
-    print(f"✗ Using original URL after retries")
-    return url
+def id_for_item(item: Dict[str, Any]) -> str:
+    s = (item.get("title", "") or "") + "|" + (item.get("link", "") or "")
+    return hashlib.sha1(s.encode("utf-8")).hexdigest()
 
 
-def format_news_item(item):
-    """Format a single news item - just title and link"""
-    title = clean_html(item.get("title", "")).strip()
-    link = item.get("link", "")
-    
-    if not title:
+# Clean HTML & entities
+RE_TAG = re.compile(r"<[^>]+>")
+RE_ENTITY = re.compile(r"&[a-zA-Z0-9#]+;")
+
+def clean_text(raw: str) -> str:
+    if not raw:
         return ""
-    
-    # Use original link to ensure it works properly
-    return f"• {title}\n  {link}\n"
+    text = RE_TAG.sub("", raw)
+    text = RE_ENTITY.sub(" ", text)
+    # collapse whitespace
+    return " ".join(text.split())
 
 
-def rank_news_with_ai(all_items):
-    """Use AI to rank news by importance for market digest"""
-    GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-    
-    if not GROQ_API_KEY or len(all_items) == 0:
-        # If no API key or no items, return as-is
-        return all_items
-    
+# Markdown V2 escaping (Telegram)
+MDV2_ESCAPE_CHARS = r"_*[]()~`>#+-=|{}.!"
+
+def escape_md_v2(text: str) -> str:
+    if not text:
+        return ""
+    # Replace backslashes first
+    text = text.replace("\\", "\\\\")
+    out = []
+    for ch in text:
+        if ch in MDV2_ESCAPE_CHARS:
+            out.append("\\" + ch)
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def chunk_text(s: str, limit: int = TELEGRAM_MAX) -> List[str]:
+    if len(s) <= limit:
+        return [s]
+    chunks = []
+    start = 0
+    while start < len(s):
+        end = min(start + limit, len(s))
+        # try to break on newline for readability
+        if end < len(s):
+            nl = s.rfind("\n", start, end)
+            if nl > start + 50:  # avoid tiny chunk
+                end = nl
+        chunks.append(s[start:end])
+        start = end
+    return chunks
+
+
+# -------------------------
+# Fetchers
+# -------------------------
+def fetch_rss(url: str, limit: int = 10) -> List[Dict[str, Any]]:
     try:
-        # Create a simple list of titles for AI to rank
-        titles_list = "\n".join([f"{i+1}. {clean_html(item.get('title', ''))[:100]}" 
-                                 for i, item in enumerate(all_items[:20])])  # Limit to first 20
-        
-        prompt = f"""Rank these news headlines by importance for market traders and investors. 
-Focus on: Fed decisions, GDP, inflation, major market moves, India economy, corporate actions.
+        d = feedparser.parse(url)
+        items = []
+        for e in d.entries[:limit]:
+            items.append({
+                "title": e.get("title", ""),
+                "link": e.get("link", ""),
+                "summary": e.get("summary", "") or e.get("description", "")
+            })
+        logging.info("Fetched %d items from RSS %s", len(items), url)
+        return items
+    except Exception as e:
+        logging.warning("RSS fetch error for %s: %s", url, str(e)[:200])
+        return []
 
-{titles_list}
 
-Return ONLY the numbers of the top 10 most important headlines, comma-separated (e.g., 3,1,7,2,9,4,8,5,10,6)"""
+def fetch_nse_json(url: str) -> Dict[str, Any]:
+    # Robust NSE fetch: handshake then JSON parse, with retries and validation
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        "Accept": "application/json, text/plain, */*",
+        "Referer": "https://www.nseindia.com/",
+        "Connection": "keep-alive",
+    }
+    session = requests.Session()
+    for attempt in range(3):
+        try:
+            # initial GET to obtain cookies
+            session.get("https://www.nseindia.com", headers=headers, timeout=10)
+            r = session.get(url, headers=headers, timeout=10)
+            r.raise_for_status()
+            ctype = r.headers.get("content-type", "")
+            if "application/json" not in ctype.lower():
+                # sometimes NSE returns HTML or empty; treat as empty
+                logging.warning("NSE returned non-json (ctype=%s) for %s", ctype, url)
+                # try to parse as json fallback
+                try:
+                    data = r.json()
+                except Exception:
+                    data = []
+                # Normalize to dict with 'data'
+                if isinstance(data, list):
+                    return {"data": data}
+                if isinstance(data, dict):
+                    return data
+                return {"data": []}
+            data = r.json()
+            logging.info("NSE fetch success: %s items", len(data) if isinstance(data, list) else len(data.get("data", [])))
+            if isinstance(data, list):
+                return {"data": data}
+            if isinstance(data, dict):
+                return data
+            return {"data": []}
+        except Exception as e:
+            logging.warning("NSE fetch attempt %d failed: %s", attempt + 1, str(e)[:200])
+            time.sleep(1 + attempt)
+    return {"data": []}
 
-        response = requests.post(
+
+# -------------------------
+# Optional AI ranking (defensive)
+# -------------------------
+def rank_with_groq(all_items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if not GROQ_API_KEY or len(all_items) == 0:
+        return all_items
+    try:
+        # build simple prompt
+        titles = "\n".join(
+            f"{i+1}. {clean_text(it.get('title',''))[:140]}" for i, it in enumerate(all_items[:30])
+        )
+        prompt = (
+            "Rank these headlines by importance to market participants (focus: Fed, GDP, CPI, central banks, "
+            "major corporate actions that affect listed stocks in India/US). Return a comma-separated list of the "
+            "top indices, e.g., 3,1,7,2. Only numbers.\n\n" + titles
+        )
+        resp = requests.post(
             "https://api.groq.com/openai/v1/chat/completions",
             headers={
                 "Authorization": f"Bearer {GROQ_API_KEY}",
@@ -108,195 +227,217 @@ Return ONLY the numbers of the top 10 most important headlines, comma-separated 
             json={
                 "model": "llama-3.3-70b-versatile",
                 "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.3,
-                "max_tokens": 100
+                "temperature": 0.0,
+                "max_tokens": 120
             },
-            timeout=10
+            timeout=8
         )
-        
-        if response.status_code == 200:
-            ai_response = response.json()["choices"][0]["message"]["content"].strip()
-            # Parse the ranked numbers
-            ranked_indices = [int(x.strip())-1 for x in ai_response.split(",") if x.strip().isdigit()]
-            
-            # Reorder items based on AI ranking
-            ranked_items = [all_items[i] for i in ranked_indices if i < len(all_items)]
-            # Add remaining items that weren't ranked
-            remaining = [item for i, item in enumerate(all_items) if i not in ranked_indices]
-            
-            print(f"✓ AI ranked {len(ranked_items)} news items")
-            return ranked_items + remaining
-        else:
-            print(f"✗ AI ranking failed, using original order")
+        if resp.status_code != 200:
+            logging.warning("GROQ non-200: %s", resp.status_code)
             return all_items
+        body = resp.json()
+        raw = body.get("choices", [{}])[0].get("message", {}).get("content", "") or ""
+        nums = re.findall(r"\d+", raw)
+        indices = [int(x) - 1 for x in nums if 0 < int(x) <= len(all_items)]
+        ranked = [all_items[i] for i in indices]
+        remaining = [all_items[i] for i in range(len(all_items)) if i not in indices]
+        logging.info("AI ranked %d items", len(ranked))
+        return ranked + remaining
     except Exception as e:
-        print(f"✗ AI ranking error: {str(e)[:50]}")
+        logging.warning("AI ranking error: %s", str(e)[:200])
         return all_items
 
 
-def build_digest_message(all_items):
-    """Build simple digest message with just titles and links"""
-    # Use AI to rank news by importance
-    ranked_items = rank_news_with_ai(all_items)
-    
-    msg = f"📈 Daily Market Digest — {now_ist().strftime('%d %b %Y')}\n\n"
-    
-    count = 0
-    for item in ranked_items:
-        if count >= 10:  # 10 items with clean short URLs
-            break
-        formatted = format_news_item(item)
-        if formatted:
-            # Check if adding this item would exceed Telegram's limit
-            if len(msg + formatted) > 3800:  # Leave some buffer
-                break
-            msg += formatted
-            count += 1
-    
-    return msg
+# -------------------------
+# Formatter: Markdown V2 beautiful layout
+# -------------------------
+def format_item_md(item: Dict[str, Any]) -> str:
+    title = clean_text(item.get("title", "")).strip()
+    if not title:
+        return ""
+    src = short_domain(item.get("link", "") or "")
+    # escape for Markdown V2
+    title_e = escape_md_v2(title)
+    src_e = escape_md_v2(src)
+    line = f"• *{title_e}*\n  _{src_e}_\n"
+    return line
 
 
+def build_markdown_message(global_items: List[Dict[str, Any]],
+                           india_items: List[Dict[str, Any]],
+                           corporate_items: List[Dict[str, Any]],
+                           world_items: List[Dict[str, Any]]) -> str:
+    date_str = now_ist().strftime("%d %b %Y")
+    header = f"*📈 Daily Market Digest — {escape_md_v2(date_str)}*\n\n"
+    sep = "\n────────────────────\n\n"
+    parts: List[str] = [header]
+
+    # Global
+    parts.append("*🌍 Global Macro Highlights*\n")
+    for it in global_items[:6]:
+        parts.append(format_item_md(it))
+    parts.append(sep)
+
+    # India
+    parts.append("*🇮🇳 India Market Highlights*\n")
+    for it in india_items[:6]:
+        parts.append(format_item_md(it))
+    parts.append(sep)
+
+    # Corporate
+    parts.append("*🏢 Corporate Actions (NSE / BSE)*\n")
+    for it in corporate_items[:8]:
+        # corporate items might be structured dicts from NSE with symbol/qty/price
+        sym = it.get("symbol") or it.get("title") or ""
+        if isinstance(sym, dict):
+            sym = sym.get("symbol", "")
+        line = escape_md_v2(str(sym))
+        parts.append(f"• `{line}`\n")
+    parts.append(sep)
+
+    # World
+    parts.append("*🌐 Major World Events*\n")
+    for it in world_items[:6]:
+        parts.append(format_item_md(it))
+    parts.append("\n_Reply `/full` to receive the extended digest._")
+
+    text = "\n".join(parts)
+    # final safety trim
+    if len(text) > TELEGRAM_MAX:
+        return text[:TELEGRAM_MAX]
+    return text
 
 
-# --------------------------
-# TELEGRAM SENDER (FREE)
+# -------------------------
+# Telegram sender (POST JSON)
+# -------------------------
+def send_telegram_markdown(message: str, parse_mode: str = "MarkdownV2") -> bool:
+    if not TG_TOKEN or not TG_CHAT_ID:
+        logging.warning("Telegram credentials missing")
+        return False
+    url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
+    headers = {"Content-Type": "application/json"}
+    chunks = chunk_text(message, TELEGRAM_MAX)
+    for c in chunks:
+        payload = {"chat_id": TG_CHAT_ID, "text": c, "parse_mode": parse_mode}
+        try:
+            r = requests.post(url, json=payload, timeout=15)
+            if r.status_code != 200:
+                logging.warning("Telegram API error %s: %s", r.status_code, r.text[:500])
+                return False
+            # small pause to avoid hitting rate limits
+            time.sleep(0.4)
+        except Exception as e:
+            logging.exception("Telegram send exception: %s", str(e)[:200])
+            return False
+    return True
 
-# --------------------------
-def send_telegram(msg):
-    TOKEN = os.getenv("TG_TOKEN")
-    CHAT_ID = os.getenv("TG_CHAT_ID")
-    if not TOKEN or not CHAT_ID:
-        print("Telegram credentials missing")
-        return
 
-    # URL-encode message to avoid breaking the URL
-    safe_msg = quote_plus(msg)
+# -------------------------
+# Main pipeline
+# -------------------------
+def run_digest() -> Tuple[str, Dict[str, Any]]:
+    ensure_dirs()
+    all_items: List[Dict[str, Any]] = []
+    seen_ids = set()
 
-    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage?chat_id={CHAT_ID}&text={safe_msg}"
+    # 1. Get RSS items
+    sources = [
+        (GLOBAL_RSS, 3),
+        (INDIA_RSS, 3),
+        ([BSE_RSS], 2),
+        (WORLD_RSS, 3)
+    ]
+    for src_list, limit in sources:
+        for url in src_list:
+            try:
+                items = fetch_rss(url, limit)
+                for it in items:
+                    it["title"] = it.get("title", "") or ""
+                    it["link"] = it.get("link", "") or ""
+                    it["summary"] = it.get("summary", "") or ""
+                    iid = id_for_item(it)
+                    if iid not in seen_ids:
+                        seen_ids.add(iid)
+                        all_items.append(it)
+            except Exception as e:
+                logging.warning("Error processing feed %s: %s", url, str(e)[:200])
+
+    # 2. NSE corporate events (block / bulk) - add to corporate_items list
+    corporate_items: List[Dict[str, Any]] = []
     try:
-        r = requests.get(url, timeout=10)
-        print("Telegram response:", r.text)
+        nse_block = fetch_nse_json(NSE_BLOCK)
+        for blk in nse_block.get("data", [])[:10]:
+            # blk is often a dict with symbol, quantity, avgprice
+            corporate_items.append({
+                "symbol": blk.get("symbol") if isinstance(blk, dict) else str(blk),
+                "raw": blk
+            })
+        nse_bulk = fetch_nse_json(NSE_BULK)
+        for b in nse_bulk.get("data", [])[:10]:
+            corporate_items.append({
+                "symbol": b.get("symbol") if isinstance(b, dict) else str(b),
+                "raw": b
+            })
+        logging.info("Corporate items collected: %d", len(corporate_items))
     except Exception as e:
-        print("Telegram send error:", e)
+        logging.warning("Error collecting corporate items: %s", str(e)[:200])
 
+    # 3. Split all_items into categories via simple heuristics
+    global_items, india_items, world_items = [], [], []
+    for it in all_items:
+        t = (it.get("title") or "").lower()
+        if any(k in t for k in ["fed", "gdp", "cpi", "inflation", "interest rate", "rate decision", "imf", "rbi"]):
+            global_items.append(it)
+        elif any(k in t for k in ["india", "nse", "bse", "mumbai", "delhi", "reliance", "tata", "infosys", "hdfc"]):
+            india_items.append(it)
+        else:
+            world_items.append(it)
 
-# --------------------------
-# FREE NEWS SOURCES
-# --------------------------
-GLOBAL_RSS = [
-    "https://feeds.reuters.com/reuters/businessNews",  # Reuters Business
-    "https://feeds.marketwatch.com/marketwatch/topstories/",  # MarketWatch
-]
+    # 4. Optional AI ranking: apply per category if available
+    if GROQ_API_KEY:
+        try:
+            global_items = rank_with_groq(global_items)
+            india_items = rank_with_groq(india_items)
+            world_items = rank_with_groq(world_items)
+        except Exception:
+            logging.warning("AI ranking skipped due to error")
 
-INDIA_RSS = [
-    "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms",  # ET Markets
-    "https://www.business-standard.com/rss/markets-106.rss",  # Business Standard
-]
+    # 5. Trim category sizes and ensure diversity
+    global_items = global_items[:8]
+    india_items = india_items[:8]
+    world_items = world_items[:6]
+    corporate_items = corporate_items[:8]
 
-BSE_RSS = "https://www.bseindia.com/xml-data/announce/RSS.xml"
+    # 6. Build message and send
+    msg = build_markdown_message(global_items, india_items, corporate_items, world_items)
+    success = send_telegram_markdown(msg)
+    status = {"telegram_sent": success, "items_collected": len(all_items), "corporate_items": len(corporate_items)}
 
-WORLD_RSS = [
-    "https://www.cnbc.com/id/100727362/device/rss/rss.html",  # CNBC World Markets
-]
-
-NSE_BLOCK = "https://www.nseindia.com/api/block-deals?index=equities"
-NSE_BULK  = "https://www.nseindia.com/api/bulk-deals?index=equities"
-
-
-# --------------------------
-# FETCH HELPERS
-# --------------------------
-def fetch_rss(url):
+    # 7. Persist digest for audit
+    ts = now_ist().strftime("%Y%m%d_%H%M")
+    out_file = os.path.join(STORAGE_PATH, f"digest_{ts}.md")
     try:
-        data = feedparser.parse(url)
-        return [{
-            "title": e.get("title"),
-            "link": e.get("link"),
-            "summary": e.get("summary", "")
-        } for e in data.entries]
-    except:
-        return []
-
-def fetch_nse_json(url):
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
-        "Accept": "application/json, text/plain, */*",
-        "Referer": "https://www.nseindia.com/",
-        "Connection": "keep-alive"
-    }
-    try:
-        session = requests.Session()
-        session.get("https://www.nseindia.com", headers=headers, timeout=10)  # initialize cookies
-        r = session.get(url, headers=headers, timeout=10)
-        r.raise_for_status()
-
-        # Try JSON decode
-        data = r.json()
-
-        # NSE sometimes returns a list instead of dict
-        if isinstance(data, list):
-            return {"data": data}
-
-        # NSE usually returns dict with 'data'
-        if isinstance(data, dict):
-            return data
-
-        return {"data": []}
-
+        with open(out_file, "w", encoding="utf-8") as fh:
+            fh.write(msg + "\n\n")
+            fh.write("METADATA:\n")
+            fh.write(json.dumps(status, ensure_ascii=False, indent=2))
+        logging.info("Saved digest to %s", out_file)
     except Exception as e:
-        print("NSE fetch failed:", e)
-        return {"data": []}
+        logging.exception("Failed to write digest file: %s", str(e)[:200])
+
+    return out_file, status
 
 
-# --------------------------
-# MAIN DIGEST LOGIC
-# --------------------------
-def run_digest():
-
-    all_items = []
-
-    # Collect items from each source with limit for diversity
-    # 1. Global macro news (take 3 from each)
-    for url in GLOBAL_RSS:
-        items = fetch_rss(url)[:3]
-        all_items.extend(items)
-        print(f"✓ Fetched {len(items)} from Global RSS")
-
-    # 2. India business news (take 3 from each)
-    for url in INDIA_RSS:
-        items = fetch_rss(url)[:3]
-        all_items.extend(items)
-        print(f"✓ Fetched {len(items)} from India RSS")
-
-    # 3. BSE announcements (take 2)
-    bse_items = fetch_rss(BSE_RSS)[:2]
-    all_items.extend(bse_items)
-    print(f"✓ Fetched {len(bse_items)} from BSE")
-
-    # 4. World events (take 3)
-    for url in WORLD_RSS:
-        items = fetch_rss(url)[:3]
-        all_items.extend(items)
-        print(f"✓ Fetched {len(items)} from World RSS")
-
-    print(f"\n📊 Total items collected: {len(all_items)}")
-
-
-    # Build simple digest message
-    msg = build_digest_message(all_items)
-    
-    # Save to file
-    os.makedirs("digests", exist_ok=True)
-    fname = f"digests/digest_{now_ist().strftime('%Y%m%d_%H%M')}.md"
-    
-    with open(fname, "w", encoding="utf-8") as f:
-        f.write(msg)
-    
-    # Send to Telegram
-    send_telegram(msg)
-
-    return fname
-
-
+# -------------------------
+# CLI entrypoint
+# -------------------------
 if __name__ == "__main__":
-    print("Generated:", run_digest())
+    logging.info("Starting digest run")
+    try:
+        out, st = run_digest()
+        logging.info("Completed digest. File: %s Status: %s", out, st)
+        print("Generated:", out)
+    except Exception as fatal:
+        logging.exception("Digest run failed: %s", str(fatal)[:200])
+        raise
