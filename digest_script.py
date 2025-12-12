@@ -88,14 +88,15 @@ def short_domain(url: str) -> str:
 
 
 def shorten_link(url: str) -> str:
-    """Shorten URL using is.gd free service with retry and fallback"""
+    """Shorten URL using TinyURL free service with retry and fallback"""
     if not url or len(url) < 30:  # Don't shorten already short URLs
         return url
     
     for attempt in range(2):  # Try twice
         try:
             time.sleep(0.3)  # Small delay to avoid rate limiting
-            api_url = f"https://is.gd/create.php?format=simple&url={requests.utils.quote(url)}"
+            from urllib.parse import quote_plus
+            api_url = f"https://tinyurl.com/api-create.php?url={quote_plus(url)}"
             response = requests.get(api_url, timeout=10)
             
             if response.status_code == 200 and response.text.startswith('http'):
@@ -103,10 +104,10 @@ def shorten_link(url: str) -> str:
                 logging.info("Shortened URL: %s -> %s", url[:50], short_url)
                 return short_url
             else:
-                logging.warning("is.gd attempt %d failed: %s", attempt + 1, response.text[:100])
+                logging.warning("TinyURL attempt %d failed: %s", attempt + 1, response.text[:100])
                 time.sleep(1)
         except Exception as e:
-            logging.warning("is.gd attempt %d error: %s", attempt + 1, str(e)[:100])
+            logging.warning("TinyURL attempt %d error: %s", attempt + 1, str(e)[:100])
             time.sleep(1)
     
     # If both attempts fail, return original URL
