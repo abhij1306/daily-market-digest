@@ -87,6 +87,33 @@ def short_domain(url: str) -> str:
         return url
 
 
+def shorten_link(url: str) -> str:
+    """Shorten URL using is.gd free service with retry and fallback"""
+    if not url or len(url) < 30:  # Don't shorten already short URLs
+        return url
+    
+    for attempt in range(2):  # Try twice
+        try:
+            time.sleep(0.3)  # Small delay to avoid rate limiting
+            api_url = f"https://is.gd/create.php?format=simple&url={requests.utils.quote(url)}"
+            response = requests.get(api_url, timeout=10)
+            
+            if response.status_code == 200 and response.text.startswith('http'):
+                short_url = response.text.strip()
+                logging.info("Shortened URL: %s -> %s", url[:50], short_url)
+                return short_url
+            else:
+                logging.warning("is.gd attempt %d failed: %s", attempt + 1, response.text[:100])
+                time.sleep(1)
+        except Exception as e:
+            logging.warning("is.gd attempt %d error: %s", attempt + 1, str(e)[:100])
+            time.sleep(1)
+    
+    # If both attempts fail, return original URL
+    logging.info("Using original URL after shortening failed")
+    return url
+
+
 def id_for_item(item: Dict[str, Any]) -> str:
     s = (item.get("title", "") or "") + "|" + (item.get("link", "") or "")
     return hashlib.sha1(s.encode("utf-8")).hexdigest()
@@ -251,57 +278,65 @@ def rank_with_groq(all_items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 # -------------------------
 # Formatter: Markdown V2 beautiful layout
 # -------------------------
-def format_item_md(item: Dict[str, Any]) -> str:
+def format_item_plain(item: Dict[str, Any]) -> str:
+    """Format news item in plain text with shortened link"""
     title = clean_text(item.get("title", "")).strip()
     if not title:
         return ""
-    src = short_domain(item.get("link", "") or "")
-    # escape for Markdown V2
-    title_e = escape_md_v2(title)
-    src_e = escape_md_v2(src)
-    line = f"• *{title_e}*\n  _{src_e}_\n"
-    return line
+    link = item.get("link", "") or ""
+    
+    # Shorten the link
+    short_link = shorten_link(link) if link else ""
+    
+    # Plain text format: bullet + title + link on next line
+    return f"• {title}\n  {short_link}\n\n"
 
 
-def build_markdown_message(global_items: List[Dict[str, Any]],
-                           india_items: List[Dict[str, Any]],
-                           corporate_items: List[Dict[str, Any]],
-                           world_items: List[Dict[str, Any]]) -> str:
+def build_plain_message(global_items: List[Dict[str, Any]],
+                        india_items: List[Dict[str, Any]],
+                        corporate_items: List[Dict[str, Any]],
+                        world_items: List[Dict[str, Any]]) -> str:
+    """Build plain text message with shortened links"""
     date_str = now_ist().strftime("%d %b %Y")
-    header = f"*📈 Daily Market Digest — {escape_md_v2(date_str)}*\n\n"
-    sep = "\n────────────────────\n\n"
+    header = f"📈 Daily Market Digest — {date_str}\n\n"
+    sep = "━━━━━━━━━━━━━━━━\n\n"
     parts: List[str] = [header]
 
     # Global
-    parts.append("*🌍 Global Macro Highlights*\n")
-    for it in global_items[:6]:
-        parts.append(format_item_md(it))
-    parts.append(sep)
+    if global_items:
+        parts.append("🌍 Global Macro Highlights\n\n")
+        for it in global_items[:5]:
+            parts.append(format_item_plain(it))
+        parts.append(sep)
 
     # India
-    parts.append("*🇮🇳 India Market Highlights*\n")
-    for it in india_items[:6]:
-        parts.append(format_item_md(it))
-    parts.append(sep)
+    if india_items:
+        parts.append("🇮🇳 India Market Highlights\n\n")
+        for it in india_items[:5]:
+            parts.append(format_item_plain(it))
+        parts.append(sep)
 
     # Corporate
-    parts.append("*🏢 Corporate Actions (NSE / BSE)*\n")
-    for it in corporate_items[:8]:
-        # corporate items might be structured dicts from NSE with symbol/qty/price
-        sym = it.get("symbol") or it.get("title") or ""
-        if isinstance(sym, dict):
-            sym = sym.get("symbol", "")
-        line = escape_md_v2(str(sym))
-        parts.append(f"• `{line}`\n")
-    parts.append(sep)
+    if corporate_items:
+        parts.append("🏢 Corporate Actions (NSE / BSE)\n\n")
+        for it in corporate_items[:8]:
+            # corporate items might be structured dicts from NSE with symbol/qty/price
+            sym = it.get("symbol") or it.get("title") or ""
+            if isinstance(sym, dict):
+                sym = sym.get("symbol", "")
+            line = str(sym) # No escaping needed for plain text
+            parts.append(f"• {line}\n")
+        parts.append(sep)
 
     # World
-    parts.append("*🌐 Major World Events*\n")
-    for it in world_items[:6]:
-        parts.append(format_item_md(it))
-    parts.append("\n_Reply `/full` to receive the extended digest._")
+    if world_items:
+        parts.append("🌐 Major World Events\n\n")
+        for it in world_items[:5]:
+            parts.append(format_item_plain(it))
+        parts.append("\nReply /full to receive the extended digest.")
 
-    text = "\n".join(parts)
+
+    text = "".join(parts)
     # final safety trim
     if len(text) > TELEGRAM_MAX:
         return text[:TELEGRAM_MAX]
@@ -311,7 +346,7 @@ def build_markdown_message(global_items: List[Dict[str, Any]],
 # -------------------------
 # Telegram sender (POST JSON)
 # -------------------------
-def send_telegram_markdown(message: str, parse_mode: str = "MarkdownV2") -> bool:
+def send_telegram_markdown(message: str, parse_mode: str = None) -> bool:
     if not TG_TOKEN or not TG_CHAT_ID:
         logging.error("Telegram credentials missing - TG_TOKEN: %s, TG_CHAT_ID: %s", 
                      "SET" if TG_TOKEN else "MISSING", 
@@ -326,7 +361,9 @@ def send_telegram_markdown(message: str, parse_mode: str = "MarkdownV2") -> bool
     
     for idx, c in enumerate(chunks):
         logging.info("Sending chunk %d/%d", idx + 1, len(chunks))
-        payload = {"chat_id": TG_CHAT_ID, "text": c, "parse_mode": parse_mode}
+        payload = {"chat_id": TG_CHAT_ID, "text": c}
+        if parse_mode:  # Only add parse_mode if specified
+            payload["parse_mode"] = parse_mode
         try:
             r = requests.post(url, json=payload, timeout=15)
             if r.status_code != 200:
@@ -436,8 +473,8 @@ def run_digest() -> Tuple[str, Dict[str, Any]]:
     corporate_items = corporate_items[:8]
 
     # 6. Build message and send
-    msg = build_markdown_message(global_items, india_items, corporate_items, world_items)
-    success = send_telegram_markdown(msg)
+    msg = build_plain_message(global_items, india_items, corporate_items, world_items)
+    success = send_telegram_markdown(msg)  # Will use plain text (parse_mode=None)
     status = {"telegram_sent": success, "items_collected": len(all_items), "corporate_items": len(corporate_items)}
 
     # 7. Persist digest for audit
