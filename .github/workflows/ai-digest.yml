@@ -1,0 +1,48 @@
+name: AI Tech Digest
+
+on:
+  schedule:
+    - cron: "30 14 * * *"   # 14:30 UTC = 20:00 IST (8 PM) daily
+  workflow_dispatch:   # Allows manual triggering
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install feedparser requests
+
+      - name: Show time (debug)
+        run: date
+
+      - name: Run AI digest script
+        env:
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          SHORTIO_API_KEY: ${{ secrets.SHORTIO_API_KEY }}
+        run: python ai_digest_script.py
+
+      - name: Commit digest files
+        run: |
+          git config user.name "News Bot"
+          git config user.email "bot@example.com"
+          git add digests/* || true
+          git diff --staged --quiet || git commit -m "AI digest update"
+          git pull --rebase || true
+          git push
