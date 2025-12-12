@@ -42,4 +42,5 @@ jobs:
           git config user.email "bot@example.com"
           git add digests/* || true
           git diff --staged --quiet || git commit -m "Daily digest update"
+          git pull --rebase || true
           git push
