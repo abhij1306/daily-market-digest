@@ -27,7 +27,7 @@ LOG_PATH = os.getenv("LOG_PATH", "./logs")
 TG_TOKEN = os.getenv("TG_TOKEN")
 TG_CHAT_ID = os.getenv("TG_CHAT_ID")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-SHORTIO_API_KEY = os.getenv("SHORTIO_API_KEY", "REMOVED_SECRET")
+SHORTIO_API_KEY = os.getenv("SHORTIO_API_KEY")
 SHORTIO_DOMAIN = "abhij1306.short.gy"
 TELEGRAM_MAX = 3900
 

@@ -97,7 +97,7 @@ def shorten_link(url: str) -> str:
         return url
     
     # Short.io API configuration
-    SHORTIO_API_KEY = os.getenv("SHORTIO_API_KEY", "REMOVED_SECRET")
+    SHORTIO_API_KEY = os.getenv("SHORTIO_API_KEY")
     SHORTIO_DOMAIN = "abhij1306.short.gy"
     
     if not SHORTIO_API_KEY:
